@@ -1,0 +1,5 @@
+example.com/foo/wire.go:x:y: multiple bindings for []*example.com/foo.Bar
+current:
+<- provider "provideBarsAgain" (example.com/foo/foo.go:x:y)
+previous:
+<- provider "provideBars" (example.com/foo/foo.go:x:y)
