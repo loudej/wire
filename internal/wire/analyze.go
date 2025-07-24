@@ -336,6 +336,15 @@ func buildProviderMap(fset *token.FileSet, hasher typeutil.Hasher, set *Provider
 	srcMap.SetHasher(hasher)
 
 	ec := new(errorCollector)
+
+	binder := binder{
+		fileSet:        fset,
+		providerSet:    set,
+		errorCollector: ec,
+		providerMap:    providerMap,
+		srcMap:         srcMap,
+	}
+
 	// Process injector arguments.
 	if set.InjectorArgs != nil {
 		givens := set.InjectorArgs.Tuple
@@ -343,24 +352,14 @@ func buildProviderMap(fset *token.FileSet, hasher typeutil.Hasher, set *Provider
 			typ := givens.At(i).Type()
 			arg := &InjectorArg{Args: set.InjectorArgs, Index: i}
 			src := &providerSetSrc{InjectorArg: arg}
-			if prevSrc := srcMap.At(typ); prevSrc != nil {
-				ec.add(bindingConflictError(fset, typ, set, src, prevSrc.(*providerSetSrc)))
-				continue
-			}
-			providerMap.Set(typ, &ProvidedType{t: typ, a: arg})
-			srcMap.Set(typ, src)
+			binder.bind(typ, src, &ProvidedType{t: typ, a: arg})
 		}
 	}
 	// Process imports, verifying that there are no conflicts between sets.
 	for _, imp := range set.Imports {
 		src := &providerSetSrc{Import: imp}
 		imp.providerMap.Iterate(func(k types.Type, v interface{}) {
-			if prevSrc := srcMap.At(k); prevSrc != nil {
-				ec.add(bindingConflictError(fset, k, set, src, prevSrc.(*providerSetSrc)))
-				return
-			}
-			providerMap.Set(k, v)
-			srcMap.Set(k, src)
+			binder.bind(k, src, v)
 		})
 	}
 	if len(ec.errors) > 0 {
@@ -371,32 +370,17 @@ func buildProviderMap(fset *token.FileSet, hasher typeutil.Hasher, set *Provider
 	for _, p := range set.Providers {
 		src := &providerSetSrc{Provider: p}
 		for _, typ := range p.Out {
-			if prevSrc := srcMap.At(typ); prevSrc != nil {
-				ec.add(bindingConflictError(fset, typ, set, src, prevSrc.(*providerSetSrc)))
-				continue
-			}
-			providerMap.Set(typ, &ProvidedType{t: typ, p: p})
-			srcMap.Set(typ, src)
+			binder.bind(typ, src, &ProvidedType{t: typ, p: p})
 		}
 	}
 	for _, v := range set.Values {
-		src := &providerSetSrc{Value: v}
-		if prevSrc := srcMap.At(v.Out); prevSrc != nil {
-			ec.add(bindingConflictError(fset, v.Out, set, src, prevSrc.(*providerSetSrc)))
-			continue
-		}
-		providerMap.Set(v.Out, &ProvidedType{t: v.Out, v: v})
-		srcMap.Set(v.Out, src)
+		binder.bind(v.Out, &providerSetSrc{Value: v}, &ProvidedType{t: v.Out, v: v})
+
 	}
 	for _, f := range set.Fields {
 		src := &providerSetSrc{Field: f}
 		for _, typ := range f.Out {
-			if prevSrc := srcMap.At(typ); prevSrc != nil {
-				ec.add(bindingConflictError(fset, typ, set, src, prevSrc.(*providerSetSrc)))
-				continue
-			}
-			providerMap.Set(typ, &ProvidedType{t: typ, f: f})
-			srcMap.Set(typ, src)
+			binder.bind(typ, src, &ProvidedType{t: typ, f: f})
 		}
 	}
 	if len(ec.errors) > 0 {
@@ -407,12 +391,11 @@ func buildProviderMap(fset *token.FileSet, hasher typeutil.Hasher, set *Provider
 	// ensure the concrete type is being provided.
 	for _, b := range set.Bindings {
 		src := &providerSetSrc{Binding: b}
-		if prevSrc := srcMap.At(b.Iface); prevSrc != nil {
-			ec.add(bindingConflictError(fset, b.Iface, set, src, prevSrc.(*providerSetSrc)))
+		if binder.test(b.Iface, src) == testedConflict {
 			continue
 		}
-		concrete := providerMap.At(b.Provided)
-		if concrete == nil {
+		concrete, ok := providerMap.At(b.Provided).(*ProvidedType)
+		if !ok {
 			setName := set.VarName
 			if setName == "" {
 				setName = "provider set"
@@ -420,13 +403,45 @@ func buildProviderMap(fset *token.FileSet, hasher typeutil.Hasher, set *Provider
 			ec.add(notePosition(fset.Position(b.Pos), fmt.Errorf("wire.Bind of concrete type %q to interface %q, but %s does not include a provider for %q", b.Provided, b.Iface, setName, b.Provided)))
 			continue
 		}
-		providerMap.Set(b.Iface, concrete)
-		srcMap.Set(b.Iface, src)
+		binder.bind(b.Iface, src, concrete)
 	}
 	if len(ec.errors) > 0 {
 		return nil, nil, ec.errors
 	}
 	return providerMap, srcMap, nil
+}
+
+type binder struct {
+	errorCollector *errorCollector
+	fileSet        *token.FileSet
+	providerMap    *typeutil.Map
+	srcMap         *typeutil.Map
+	providerSet    *ProviderSet
+}
+
+type tested int
+
+const (
+	testedUnspecified tested = iota
+	testedConflict
+	testedNew
+)
+
+func (b binder) test(typ types.Type, src *providerSetSrc) tested {
+	prevSrc := b.srcMap.At(typ)
+	if prevSrc == nil {
+		return testedNew
+	}
+	b.errorCollector.add(bindingConflictError(b.fileSet, typ, b.providerSet, src, prevSrc.(*providerSetSrc)))
+	return testedConflict
+}
+
+func (b binder) bind(typ types.Type, src *providerSetSrc, provider *ProvidedType) {
+	switch b.test(typ, src) {
+	case testedNew:
+		b.providerMap.Set(typ, provider)
+		b.srcMap.Set(typ, src)
+	}
 }
 
 func verifyAcyclic(providerMap *typeutil.Map, hasher typeutil.Hasher) []error {
