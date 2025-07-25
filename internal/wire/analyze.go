@@ -31,6 +31,7 @@ type callKind int
 const (
 	funcProviderCall callKind = iota
 	structProvider
+	sliceProvider
 	valueExpr
 	selectorExpr
 )
@@ -98,8 +99,11 @@ func solve(fset *token.FileSet, out types.Type, given *types.Tuple, set *Provide
 	// Start building the mapping of type to local variable of the given type.
 	// The first len(given) local variables are the given types.
 	index := new(typeutil.Map)
-	for i := 0; i < given.Len(); i++ {
-		index.Set(given.At(i).Type(), i)
+	for _, k := range set.providerMap.Keys() {
+		pv := set.For(k)
+		if pv.IsArg() {
+			index.Set(pv.Type(), pv.Arg().Index)
+		}
 	}
 
 	// Topological sort of the directed graph defined by the providers
@@ -194,6 +198,9 @@ dfs:
 				for _, arg := range p.Args {
 					fieldNames = append(fieldNames, arg.FieldName)
 				}
+			}
+			if p.IsSlice {
+				kind = sliceProvider
 			}
 			calls = append(calls, call{
 				kind:       kind,
@@ -359,7 +366,7 @@ func buildProviderMap(fset *token.FileSet, hasher typeutil.Hasher, set *Provider
 	for _, imp := range set.Imports {
 		src := &providerSetSrc{Import: imp}
 		imp.providerMap.Iterate(func(k types.Type, v interface{}) {
-			binder.bind(k, src, v)
+			binder.bind(k, src, v.(*ProvidedType))
 		})
 	}
 	if len(ec.errors) > 0 {
@@ -425,6 +432,7 @@ const (
 	testedUnspecified tested = iota
 	testedConflict
 	testedNew
+	testedMergable
 )
 
 func (b binder) test(typ types.Type, src *providerSetSrc) tested {
@@ -432,15 +440,51 @@ func (b binder) test(typ types.Type, src *providerSetSrc) tested {
 	if prevSrc == nil {
 		return testedNew
 	}
+	if _, ok := typ.(*types.Slice); ok {
+		return testedMergable
+	}
 	b.errorCollector.add(bindingConflictError(b.fileSet, typ, b.providerSet, src, prevSrc.(*providerSetSrc)))
 	return testedConflict
 }
 
-func (b binder) bind(typ types.Type, src *providerSetSrc, provider *ProvidedType) {
+func (b binder) bind(typ types.Type, src *providerSetSrc, provided *ProvidedType) {
 	switch b.test(typ, src) {
 	case testedNew:
-		b.providerMap.Set(typ, provider)
+		b.providerMap.Set(typ, provided)
 		b.srcMap.Set(typ, src)
+	case testedMergable:
+		prevProvided := b.providerMap.At(typ).(*ProvidedType)
+		prevSrc := b.srcMap.At(typ).(*providerSetSrc)
+
+		args := b.asMergedInput(typ, prevSrc, prevProvided)
+		args = append(args, b.asMergedInput(typ, src, provided)...)
+
+		// slice:=typ.(*types.Slice)
+		p := &Provider{
+			Out:     []types.Type{typ},
+			IsSlice: true,
+			Args:    args,
+		}
+		b.providerMap.Set(typ, &ProvidedType{t: typ, p: p})
+		b.srcMap.Set(typ, &providerSetSrc{Provider: p})
+	}
+}
+
+var mergeNonce = 0
+
+func (b binder) asMergedInput(typ types.Type, src *providerSetSrc, provided *ProvidedType) []ProviderInput {
+	if provided.IsProvider() && provided.Provider().IsSlice {
+		return provided.p.Args
+	}
+	mergeNonce += 1
+	named := types.NewNamed(types.NewTypeName(0, types.NewPackage("github.com/google/wire", "wire"), fmt.Sprintf("slice%02d", mergeNonce), nil), typ, nil)
+	p := *provided
+	p.t = named
+	b.providerMap.Set(named, &p)
+	b.srcMap.Set(named, src)
+
+	return []ProviderInput{
+		{Type: named},
 	}
 }
 

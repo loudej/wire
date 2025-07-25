@@ -23,5 +23,27 @@ import (
 
 func inject() *Foo {
 	// fail: provideBars and provideBarsAgain both provide []*Bar.
-	panic(wire.Build(provideFoo, provideBars, provideBarsAgain))
+	panic(wire.Build(
+		provideFoo,
+		provideBars,
+		provideBarsAgain,
+		wire.Struct(new(Baaz), "*"),
+	))
+}
+
+func injectSingle() *Foo {
+	panic(wire.Build(
+		provideFoo,
+		provideBars,
+		wire.Struct(new(Baaz), "*"),
+	))
+}
+
+func injectWithGiven(bars []*Bar) *Foo {
+	panic(wire.Build(
+		provideFoo,
+		provideBars,
+		provideBarsAgain,
+		wire.Struct(new(Baaz), "*"),
+	))
 }

@@ -163,8 +163,12 @@ type Provider struct {
 	Varargs bool
 
 	// IsStruct is true if this provider is a named struct type.
-	// Otherwise it's a function.
+	// Otherwise it's IsSlice or a function.
 	IsStruct bool
+
+	// IsSlice is true if this provider is a slice merging type.
+	// Otherwise it's IsStruct or a function.
+	IsSlice bool
 
 	// Out is the set of types this provider produces. It will always
 	// contain at least one type.

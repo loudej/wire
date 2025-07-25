@@ -19,31 +19,53 @@ import (
 )
 
 func main() {
-	fmt.Println(inject().B)
+	fmt.Println(inject())
+	fmt.Println(injectWithGiven([]*Bar{
+		{A: "gb.0"},
+		{A: "gb.1"},
+	}))
+	fmt.Println(injectSingle())
 }
 
 type Foo struct {
-	B []*Bar
+	B    []*Bar
+	baaz Baaz
+}
+
+func (f Foo) String() string {
+	return fmt.Sprintf("{B %s baaz %s}", f.B, f.baaz)
 }
 
 type Bar struct {
 	A string
 }
 
-func provideFoo(b ...*Bar) *Foo {
-	return &Foo{B: b}
+func (b Bar) String() string {
+	return b.A
+}
+
+type Baaz struct {
+	bars []*Bar
+}
+
+func (b Baaz) String() string {
+	return fmt.Sprintf("{bars %s}", b.bars)
+}
+
+func provideFoo(baaz *Baaz, b ...*Bar) *Foo {
+	return &Foo{B: b, baaz: *baaz}
 }
 
 func provideBars() []*Bar {
 	return []*Bar{
-		{A: "bar"},
-		{A: "bar bar"},
+		{A: "pb.0.0"},
+		{A: "pb.1.0 pb.1.1"},
 	}
 }
 
 func provideBarsAgain() []*Bar {
 	return []*Bar{
-		{A: "bar again"},
-		{A: "bar bar again"},
+		{A: "pba.0.0"},
+		{A: "pba.1.0 pba.1.1"},
 	}
 }

@@ -641,6 +641,8 @@ func injectPass(name string, sig *types.Signature, calls []call, set *ProviderSe
 		switch c.kind {
 		case structProvider:
 			ig.structProviderCall(lname, c)
+		case sliceProvider:
+			ig.sliceProviderCall(lname, c)
 		case funcProviderCall:
 			ig.funcProviderCall(lname, c, injectSig)
 		case valueExpr:
@@ -728,6 +730,26 @@ func (ig *injectorGen) structProviderCall(lname string, c *call) {
 		ig.p(",\n")
 	}
 	ig.p("\t}\n")
+}
+
+func (ig *injectorGen) sliceProviderCall(lname string, c *call) {
+	for i, a := range c.args {
+		if i == 0 {
+			ig.p("\t%s := ", lname)
+		} else {
+			ig.p("\t%s = append(%s, ", lname, lname)
+		}
+		if a < len(ig.paramNames) {
+			ig.p(ig.paramNames[a])
+		} else {
+			ig.p(ig.localNames[a-len(ig.paramNames)])
+		}
+		if i == 0 {
+			ig.p("\n")
+		} else {
+			ig.p("...)\n")
+		}
+	}
 }
 
 func (ig *injectorGen) valueExpr(lname string, c *call) {
